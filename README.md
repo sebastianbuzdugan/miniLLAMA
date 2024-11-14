@@ -37,14 +37,7 @@ Pre-train LLAMA
 $ python train.py --help
 
   
->> python train.py \
-  --num-layers=8 \
-  --num-heads=12 \
-  --hidden-size=768 \
-  --max-seq-len=512 \
-  --vocab-size=32000 \
-  --batch-size=32 \
-  --learning-rate=1e-4
+>> python train.py --num-layers=6 --num-heads=8 --hidden-size=512 --max-seq-len=512 --vocab-size=32000 --batch-size=8 --learning-rate=1e-4
 ```
 Generate text after pre-training LLAMA model.
 
@@ -74,16 +67,4 @@ TO DO
 * ["akanyaani/gpt-2-tensorflow2.0"](https://github.com/akanyaani/gpt-2-tensorflow2.0)
 * ["The Illustrated GPT-2 "](https://jalammar.github.io/illustrated-gpt2/)
 
-**Contribution**
 
-* Contributions and feedback are welcome! Feel free to open issues for suggestions or bug reports, and submit pull requests to improve the project.
-
-**Author**
-
-* Abhay Kumar
-* Author Email : akanyaani@gmail.com
-* Follow me on [Twitter](https://twitter.com/akanyaani)
-
-**License**
-
-* [MIT](https://github.com/akanyaani/minGPTF/blob/master/LICENSE)

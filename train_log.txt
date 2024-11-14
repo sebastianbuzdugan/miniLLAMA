@@ -1,0 +1,29 @@
+2024-11-14 13:28:40,086 - INFO - Tokenizer pad ID: 0
+2024-11-14 13:28:40,089 - INFO - Starting training process...
+2024-11-14 13:28:40,102 - INFO - Tokenizer loaded successfully.
+2024-11-14 13:28:41,472 - INFO - Dataset and dataloader created with batch size 8.
+2024-11-14 13:28:41,768 - INFO - Model initialized and weights are set.
+2024-11-14 13:28:41,768 - INFO - Model moved to device: cpu
+2024-11-14 13:28:43,878 - INFO - Optimizer initialized with learning rate 0.0001 and weight decay 0.1.
+2024-11-14 13:28:46,450 - INFO - WandB initialized.
+2024-11-14 13:28:46,450 - INFO - Starting epoch 1/10
+2024-11-14 13:28:50,641 - INFO - Epoch: 1, Step: 1, Loss: 10.2305, Perplexity: 27735.72
+2024-11-14 13:28:54,206 - INFO - Epoch: 1, Step: 2, Loss: 9.3381, Perplexity: 11362.26
+2024-11-14 13:28:58,848 - INFO - Epoch: 1, Step: 3, Loss: 8.2667, Perplexity: 3892.07
+2024-11-14 13:29:07,074 - INFO - Epoch: 1, Step: 4, Loss: 6.3605, Perplexity: 578.54
+2024-11-14 13:29:10,690 - INFO - Epoch: 1, Step: 5, Loss: 7.3654, Perplexity: 1580.33
+2024-11-14 13:29:16,714 - INFO - Epoch: 1, Step: 6, Loss: 6.7204, Perplexity: 829.16
+2024-11-14 13:29:20,418 - INFO - Epoch: 1, Step: 7, Loss: 8.4768, Perplexity: 4802.07
+2024-11-14 13:29:27,670 - INFO - Epoch: 1, Step: 8, Loss: 5.9284, Perplexity: 375.55
+2024-11-14 13:29:43,838 - INFO - Epoch: 1, Step: 9, Loss: 3.7726, Perplexity: 43.49
+2024-11-14 13:29:51,070 - INFO - Epoch: 1, Step: 10, Loss: 5.8800, Perplexity: 357.81
+2024-11-14 13:29:56,592 - INFO - Epoch: 1, Step: 11, Loss: 6.2096, Perplexity: 497.52
+2024-11-14 13:30:05,692 - INFO - Epoch: 1, Step: 12, Loss: 4.9358, Perplexity: 139.19
+2024-11-14 13:30:09,533 - INFO - Epoch: 1, Step: 13, Loss: 6.0880, Perplexity: 440.56
+2024-11-14 13:30:15,860 - INFO - Epoch: 1, Step: 14, Loss: 5.8229, Perplexity: 337.93
+2024-11-14 13:30:59,937 - INFO - Epoch: 1, Step: 15, Loss: 2.7830, Perplexity: 16.17
+2024-11-14 13:31:05,041 - INFO - Epoch: 1, Step: 16, Loss: 5.3233, Perplexity: 205.07
+2024-11-14 13:31:12,811 - INFO - Epoch: 1, Step: 17, Loss: 3.9391, Perplexity: 51.37
+2024-11-14 13:31:15,297 - INFO - Epoch: 1, Step: 18, Loss: 7.6382, Perplexity: 2076.06
+2024-11-14 13:31:18,221 - INFO - Epoch: 1, Step: 19, Loss: 7.5105, Perplexity: 1827.11
+2024-11-14 13:31:25,814 - INFO - Epoch: 1, Step: 20, Loss: 5.2656, Perplexity: 193.56

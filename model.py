@@ -2,8 +2,41 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 import math
+import logging
+import os
 from utils import create_masks
 
+
+# =========================
+# Logging Configuration
+# =========================
+
+# Create a logger for the model
+logger = logging.getLogger('model_logger')
+logger.setLevel(logging.INFO)  # Set to INFO or DEBUG based on your needs
+
+# Create a file handler to write logs to 'model_log.txt'
+log_file = os.path.join(os.path.dirname(__file__), "model_log.txt")
+file_handler = logging.FileHandler(log_file, mode='w')  # 'w' to overwrite each run
+file_handler.setLevel(logging.INFO)  # Adjust level as needed
+
+# Create a logging format
+formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+file_handler.setFormatter(formatter)
+
+# Add the handler to the logger
+logger.addHandler(file_handler)
+
+# Optionally, add a stream handler to also output to console (set to WARNING to reduce verbosity)
+stream_handler = logging.StreamHandler()
+stream_handler.setLevel(logging.WARNING)  # Only WARNING and above will be printed to console
+stream_handler.setFormatter(formatter)
+logger.addHandler(stream_handler)
+
+
+# =========================
+# Model Components
+# =========================
 
 class RMSNorm(nn.Module):
     def __init__(self, hidden_size, eps=1e-6):
@@ -16,11 +49,10 @@ class RMSNorm(nn.Module):
         self.variance_epsilon = eps
 
     def forward(self, hidden_states):
-        input_dtype = hidden_states.dtype
         hidden_states = hidden_states.to(torch.float32)
         variance = hidden_states.pow(2).mean(-1, keepdim=True)
         hidden_states = hidden_states * torch.rsqrt(variance + self.variance_epsilon)
-        return self.weight * hidden_states.to(input_dtype)
+        return self.weight * hidden_states.to(hidden_states.dtype)
 
 
 class FeedForward(nn.Module):
@@ -45,14 +77,15 @@ class RotaryEmbedding(nn.Module):
         self.dim = dim
         self.max_position_embeddings = max_position_embeddings
         self.base = base
-        inv_freq = 1.0 / (self.base ** (torch.arange(0, self.dim, 2, dtype=torch.int64).float().to(device) / self.dim))
+        inv_freq = 1.0 / (self.base ** (torch.arange(0, self.dim, 2, dtype=torch.float32) / self.dim))
         self.register_buffer("inv_freq", inv_freq, persistent=False)
 
     def forward(self, x, position_ids, seq_len=None):
-        # x: [bs, num_attention_heads, seq_len, head_size]
-        freqs = (self.inv_freq[:, None].float().expand(-1, position_ids.shape[0]) @ (position_ids.float())).t()
-        emb = torch.cat((freqs, freqs), dim=-1)
-        return emb.cos().to(dtype=x.dtype), emb.sin().to(dtype=x.dtype)
+        # x: [B, num_key_value_heads, T, head_dim]
+        # position_ids: [1, T]
+        freqs = (self.inv_freq[:, None].float() * position_ids.float()).transpose(0, 1)  # [T, dim/2]
+        emb = torch.cat((freqs, freqs), dim=-1)  # [T, dim]
+        return emb.cos(), emb.sin()
 
 
 def repeat_kv(hidden_states, n_rep):
@@ -65,12 +98,27 @@ def repeat_kv(hidden_states, n_rep):
 
 def rotate_half(x):
     """Rotates half the hidden dims of the input."""
-    x1 = x[..., : x.shape[-1] // 2]
+    x1 = x[..., :x.shape[-1] // 2]
     x2 = x[..., x.shape[-1] // 2:]
     return torch.cat((-x2, x1), dim=-1)
 
 
 def apply_rotary_pos_emb(q, k, cos, sin, position_ids, unsqueeze_dim=1):
+    """
+    Applies rotary positional embeddings to query and key tensors.
+    Args:
+        q: Query tensor [B, num_heads, T, head_dim]
+        k: Key tensor [B, num_heads, T, head_dim]
+        cos: Cosine embeddings [T, head_dim]
+        sin: Sine embeddings [T, head_dim]
+        position_ids: Position IDs [1, T]
+        unsqueeze_dim: Dimension to unsqueeze for broadcasting
+    Returns:
+        q_embed, k_embed: Embedding-applied query and key tensors
+    """
+    # Expand cos and sin to [1, 1, T, head_dim] for broadcasting
+    cos = cos.unsqueeze(0).unsqueeze(0)  # [1, 1, T, head_dim]
+    sin = sin.unsqueeze(0).unsqueeze(0)  # [1, 1, T, head_dim]
     q_embed = (q * cos) + (rotate_half(q) * sin)
     k_embed = (k * cos) + (rotate_half(k) * sin)
     return q_embed, k_embed
@@ -91,6 +139,11 @@ class Attention(nn.Module):
         self.num_key_value_groups = self.num_heads // self.num_key_value_heads
         self.attention_dropout = self.config["attention_dropout"]
 
+        # Validate that num_heads is divisible by num_key_value_heads
+        if self.num_key_value_groups < 1:
+            logger.error("num_key_value_heads must divide num_heads without remainder.")
+            raise ValueError("num_key_value_heads must divide num_heads without remainder.")
+
         self.wq = nn.Linear(self.hidden_size, self.num_heads * self.head_dim, bias=False)
         self.wk = nn.Linear(self.hidden_size, self.num_key_value_heads * self.head_dim, bias=False)
         self.wv = nn.Linear(self.hidden_size, self.num_key_value_heads * self.head_dim, bias=False)
@@ -100,41 +153,48 @@ class Attention(nn.Module):
         self.rotary_emb = RotaryEmbedding(
             self.head_dim,
             max_position_embeddings=config["max_len"],
-            base=config["rope_theta"]
+            base=config["rope_theta"],
+            device=None  # Device will be set dynamically based on input
         )
 
     def forward(self, x, mask=None, training=False):
         B, T, C = x.size()  # batch size, sequence length, embedding dimensionality (n_embd)
 
-        position_ids = torch.arange(T, device=x.device).repeat([B, 1]).long()
-        # print("++++++++",position_ids)
+        # Generate position_ids as [1, T] instead of [B, T]
+        position_ids = torch.arange(T, device=x.device).unsqueeze(0).long()  # [1, T]
 
-        q = self.wq(x)
-        k = self.wk(x)
-        v = self.wv(x)
+        q = self.wq(x)  # [B, T, num_heads * head_dim]
+        k = self.wk(x)  # [B, T, num_key_value_heads * head_dim]
+        v = self.wv(x)  # [B, T, num_key_value_heads * head_dim]
 
-        q = q.view(B, T, self.num_heads, self.head_dim).transpose(1, 2)
-        k = k.view(B, T, self.num_key_value_heads, self.head_dim).transpose(1, 2)
-        v = v.view(B, T, self.num_key_value_heads, self.head_dim).transpose(1, 2)
+        q = q.view(B, T, self.num_heads, self.head_dim).transpose(1, 2)  # [B, num_heads, T, head_dim]
+        k = k.view(B, T, self.num_key_value_heads, self.head_dim).transpose(1, 2)  # [B, num_key_value_heads, T, head_dim]
+        v = v.view(B, T, self.num_key_value_heads, self.head_dim).transpose(1, 2)  # [B, num_key_value_heads, T, head_dim]
 
-        #         print("q++++++++", q.shape)
+        # Change 1: Log shapes of q, k, v
+        logger.info(f"Change 1: Shape of q: {q.shape}, Shape of k: {k.shape}, Shape of v: {v.shape}")
 
-        cos, sin = self.rotary_emb(v, position_ids, seq_len=None)
-        q, k = apply_rotary_pos_emb(q, k, cos, sin, None)
+        # Check for zero-size dimension in k or v to prevent errors in matmul
+        if k.size(1) == 0 or v.size(1) == 0:
+            logger.warning("Change 1: Skipping attention computation due to zero dimension in k or v")
+            return torch.zeros_like(q)  # Return zeros or handle as appropriate for your model
 
-        k = repeat_kv(k, self.num_key_value_groups)
-        v = repeat_kv(v, self.num_key_value_groups)
+        # Apply rotary positional embeddings
+        cos, sin = self.rotary_emb(v, position_ids, seq_len=None)  # [T, head_dim], [T, head_dim]
+        q, k = apply_rotary_pos_emb(q, k, cos, sin, position_ids)
 
-        matmul_qk = torch.matmul(q, k.transpose(2, 3)) / math.sqrt(self.head_dim)
+        k = repeat_kv(k, self.num_key_value_groups)  # [B, num_heads, T, head_dim]
+        v = repeat_kv(v, self.num_key_value_groups)  # [B, num_heads, T, head_dim]
+
+        matmul_qk = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(self.head_dim)  # [B, num_heads, T, T]
         if mask is not None:
             matmul_qk += (mask * -1e9)
 
-        attn_scores = F.softmax(matmul_qk, dim=-1)
-        # print("attn_scores", attn_scores)
+        attn_scores = F.softmax(matmul_qk, dim=-1)  # [B, num_heads, T, T]
         attn_scores = F.dropout(attn_scores, p=self.attention_dropout, training=self.training)
-        y = torch.matmul(attn_scores, v)  # Weighted sum
+        y = torch.matmul(attn_scores, v)  # [B, num_heads, T, head_dim]
 
-        y = y.transpose(1, 2).contiguous().view(B, T, C)
+        y = y.transpose(1, 2).contiguous().view(B, T, C)  # [B, T, hidden_size]
 
         return self.c_proj(y)
 
@@ -143,9 +203,9 @@ class DecoderBlock(nn.Module):
 
     def __init__(self, config):
         super().__init__()
-        self.ln_1 = RMSNorm(config["n_embd"], eps=config["eps"])
+        self.ln_1 = RMSNorm(config["hidden_size"], eps=config["eps"])
         self.attn = Attention(config)
-        self.ln_2 = RMSNorm(config["n_embd"], eps=config["eps"])
+        self.ln_2 = RMSNorm(config["hidden_size"], eps=config["eps"])
         self.mlp = FeedForward(config)
 
     def forward(self, x, mask):
@@ -171,11 +231,11 @@ class LLAMA(nn.Module):
         ))
         self.lm_head = nn.Linear(config["hidden_size"], config["vocab_size"], bias=False)
         self.transformer.embedding_layer.weight = self.lm_head.weight
-        print("number of parameters: %.2fM" % (self.get_num_params() / 1e6,))
+        logger.info("number of parameters: %.2fM" % (self.get_num_params() / 1e6,))
 
     def get_num_params(self, non_embedding=True):
         """
-        taken this method from Andrej karpathy minGPT
+        taken this method from Andrej Karpathy's minGPT
         Return the number of parameters in the model.
         For non-embedding count (default), the position embeddings get subtracted.
         The token embeddings would too, except due to the parameter sharing these
@@ -191,8 +251,6 @@ class LLAMA(nn.Module):
         b, t = idx.size()
 
         mask = create_masks(idx, device)  # Creating mask to handle left to right attention and mask
-        # print("mask+++++++++++++", mask)
-
         pos = torch.arange(0, t, dtype=torch.long, device=device)  # shape (t)
 
         x = self.transformer.embedding_layer(idx)  # token embeddings of shape (b, t, embd)
@@ -224,7 +282,7 @@ class LLAMA(nn.Module):
     def generate(self, prompt, tokenizer, max_new_tokens=64, temperature=1.0, top_k=None):
         # [BOS] index is 3 and [EOS] index is 4
 
-        input_ids = torch.tensor([[3] + tokenizer.EncodeAsIds(prompt)])
+        input_ids = torch.tensor([[3] + tokenizer.EncodeAsIds(prompt)], device=next(self.parameters()).device)
         for _ in range(max_new_tokens):
             logits, _ = self(input_ids)
             logits = logits[:, -1, :] / temperature
@@ -235,7 +293,7 @@ class LLAMA(nn.Module):
             predicted_id = torch.multinomial(probs, num_samples=1)
             input_ids = torch.cat((input_ids, predicted_id), dim=1)
 
-            if predicted_id == 4:
+            if predicted_id.item() == 4:
                 break
 
         input_ids = input_ids[0]
